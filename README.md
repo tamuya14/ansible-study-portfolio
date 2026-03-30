@@ -105,8 +105,8 @@ WSL2 上のプロジェクトルートで以下のコマンドを実行し、依
 > Pythonライブラリの依存関係は`requirements.txt`に記述しているため、新しいライブラリが必要な場合は `requirements.in` に追記し、`pip-compile` コマンドを実行して `requirements.txt` を更新してください。
 ```bash
 # 1. リポジトリのクローン
-git clone <repository_url>
-cd <project_directory>
+git clone https://github.com/tamuya14/ansible-study-portfolio
+cd ansible-study-portfolio
 
 # 2. システムパッケージのインストール (Ubuntu/Debian)
 まず、OSに最低限必要なツールをインストールします。
@@ -199,9 +199,11 @@ State ファイルを管理する S3 バケットをあらかじめ作成し、`
 ```hcl
 terraform {
   backend "s3" {
-    bucket = "YOUR_UNIQUE_BUCKET_NAME" #必ず自身のもの(一意のもの)に書き換えること
-    key    = "terraform.tfstate"
-    region = "ap-northeast-1"
+    bucket         = "YOUR-UNIQUE-S3-BUCKET-NAME"           #必ず自身のもの(一意のもの)に書き換えること
+    key            = "aws-ansible-study/terraform.tfstate"
+    region         = "ap-northeast-1"
+    dynamodb_table = "YOUR-DYNAMODB-TABLE-NAME"             #必ず自身のもの(一意のもの)に書き換えること
+    encrypt        = true
   }
 }
 ```

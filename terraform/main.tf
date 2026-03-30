@@ -2,11 +2,13 @@
 terraform {
   required_version = "~> 1.14.0"
 
+#Backendはマスク処理を実施
+#※自身のものに差し替える
 backend "s3" {
-    bucket         = "super-power-app-tfstate-202602161600"
+    bucket         = "YOUR-UNIQUE-S3-BUCKET-NAME"
     key            = "aws-ansible-study/terraform.tfstate"
     region         = "ap-northeast-1"
-    dynamodb_table = "super-power-app-terraform-locks"
+    dynamodb_table = "YOUR-DYNAMODB-TABLE-NAME"
     encrypt        = true
   }
 
