@@ -1,0 +1,16 @@
+.ansible/
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+*.pem
+*.tfvars
+.venv/
+__pycache__/
+*.pyc
+.vscode/
+.env
+.DS_Store
+id_ed25519
+id_ed25519.pub
+group_vars/

@@ -1,0 +1,82 @@
+- name: Install Apache and PHP packages
+  ansible.builtin.dnf:
+    name:
+      - httpd
+      - php
+      - php-mysqlnd
+      - php-gd
+      - php-xml
+      - php-mbstring
+      - php-fpm
+      - mariadb105
+      - tar
+      - net-tools
+    state: present
+    update_cache: true
+
+- name: Ensure python3-pip is installed
+  ansible.builtin.dnf: # Amazon Linux 2023等の場合。Ubuntuならaptを使ってください
+    name: python3-pip
+    state: present
+
+- name: Install required Python libraries for AWS
+  ansible.builtin.pip:
+    name:
+      - boto3
+      - botocore
+    state: present
+    executable: pip3
+
+- name: Start and enable services
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - httpd
+    - php-fpm
+
+- name: Download WordPress
+  ansible.builtin.get_url:
+    url: https://ja.wordpress.org/latest-ja.tar.gz
+    dest: /tmp/latest-ja.tar.gz
+    # すでにファイルがあればダウンロードしない
+    force: false
+    # タイムアウト時間をデフォルト（10秒）から 30秒に延長
+    timeout: 30
+    mode: '0644'
+
+- name: Extract WordPress
+  ansible.builtin.unarchive:
+    src: /tmp/latest-ja.tar.gz
+    dest: /var/www/html/
+    remote_src: true
+    creates: /var/www/html/wp-settings.php
+    extra_opts: [--strip-components=1] # 解凍時にディレクトリ階層を1つ上に上げる設定
+
+- name: Set permissions for WordPress
+  ansible.builtin.file:
+    path: /var/www/html
+    owner: apache
+    group: apache
+    recurse: true
+
+- name: Create wp-config.php
+  ansible.builtin.template:
+    src: wp-config.php.j2
+    dest: /var/www/html/wp-config.php
+    owner: apache
+    group: apache
+    mode: '0644'
+  vars:
+    # lookupプラグインを使用して、直接パスワードを取得
+    # ※ db_secret_name は group_vars/all/db_config.yml から自動的に読まれます
+    # 修正のポイント: db_password が未定義の時だけ lookup を「文字列」として組み立てる
+    # >- を使いつつ、内部の空白制御記法で Lint と実機出力を両立
+    wp_db_password: >-
+      {%- if db_password is defined -%}
+        {{- db_password | trim -}}
+      {%- else -%}
+        {{- lookup('amazon.aws.secretsmanager_secret', db_secret_name) | trim -}}
+      {%- endif -%}
+  no_log: true

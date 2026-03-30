@@ -1,0 +1,19 @@
+---
+- name: Setup WordPress Web Server
+  hosts: web_servers
+  serial: 1
+  become: true
+  gather_facts: false # 接続できる前にファクト（OS情報）を取りに行くとエラーになるため、一旦false
+
+  pre_tasks:
+    - name: Wait for instance to be reachable via SSM
+      ansible.builtin.wait_for_connection:
+        timeout: 300 # 最大5分待機
+        delay: 5      # 5秒ごとに試行
+
+    - name: Gather facts after connection is established
+      ansible.builtin.setup: # ここで手動でファクトを取得
+
+  roles:
+    - cloudwatch_agent
+    - wordpress

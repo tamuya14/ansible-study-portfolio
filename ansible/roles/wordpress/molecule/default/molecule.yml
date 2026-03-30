@@ -1,0 +1,56 @@
+dependency:
+  name: galaxy
+driver:
+  name: docker
+platforms:
+  - name: instance
+    image: geerlingguy/docker-amazonlinux2023-ansible:latest
+    privileged: true
+    command: /usr/sbin/init
+    # 修正ポイント: AppArmorやseccompの制限を解除
+    cgroupns_mode: host  # これが抜けていると Cgroup V2 環境で落ちやすい
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+# 順序を rw,exec に変更し、明示的に書き込み可能にする
+    tmpfs:
+      - /run
+      - /tmp
+    # コンテナ内の環境変数を追加
+    env:
+      container: docker
+    pre_build_image: true
+    vars:
+      ansible_python_interpreter: /usr/bin/python3
+
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      remote_tmp: /tmp/ansible
+      # 複雑なパイプ処理を避ける設定
+      pipelining: true
+  playbooks:
+    converge: converge.yml
+  env:
+    # ロールを見つけるためのパス
+    ANSIBLE_ROLES_PATH: ../../../
+    AWS_REGION: ap-northeast-1
+    AWS_ACCESS_KEY_ID: dummy_key_id
+    AWS_SECRET_ACCESS_KEY: dummy_secret_key
+  inventory:
+    group_vars:
+      all:
+        # 本来 Secrets Manager から取るはずの変数をここで定義してしまう
+        db_name: "wordpress_db_test"
+        db_user: "wp_user_test"
+        db_password: "dummy_password"
+        db_host: "localhost"
+        db_secret_name: "wp_db_test"
+    host_vars:
+      instance:
+      # コンテナ内のPythonパスを明示（ログにある通り /usr/bin/python3）
+        ansible_python_interpreter: /usr/bin/python3
+        # 接続ユーザーを強制
+        ansible_user: root
+verifier:
+  name: testinfra

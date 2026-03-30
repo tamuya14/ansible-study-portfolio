@@ -1,0 +1,15 @@
+# Ansible 本体とコア (2026年時点の安定版を想定)
+ansible>=10.0.0
+ansible-core>=2.17.0
+
+# 静的解析とテストツール (マイナーバージョンのズレを許容)
+ansible-lint>=26.0.0
+molecule[docker]>=26.0.0
+pytest-testinfra>=10.0.0
+
+# AWS 操作用ライブラリ
+boto3>=1.40.0
+botocore>=1.40.0
+
+# コードフォーマッタ
+black>=26.0.0

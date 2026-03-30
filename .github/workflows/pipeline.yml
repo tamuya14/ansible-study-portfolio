@@ -1,0 +1,189 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+
+# OIDC認証（AWSとの連携）に必要な最小限の権限
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+# ---------------------------------------------------------------------------
+# 1. 静的解析 (Lint)
+# 役割: 文法ミスや非推奨の書き方を、テスト実行前に弾く「最初の門番」
+# ---------------------------------------------------------------------------
+  ansible-lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./ansible
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install ansible-lint
+        run: |
+          pip install ansible-lint
+
+      - name: Run ansible-lint
+      # site.yml と roles ディレクトリ全体をチェック
+        run: ansible-lint site.yml roles/
+
+# ---------------------------------------------------------------------------
+# 2. 結合テスト (Molecule)
+# 役割: Dockerコンテナ内で実際に構築を行い、OS設定やミドルウェアが正しく動くか検証
+# ---------------------------------------------------------------------------
+  molecule:
+    needs: ansible-lint # Lintが通らない限り、重いテストは実行しない
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ansible-version: ['stable-2.15']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install boto3 botocore --upgrade pip
+          pip install molecule molecule-plugins[docker] ansible-core pytest-testinfra
+
+      - name: Install Ansible Galaxy collections
+        run: |
+          # MoleculeのDockerドライバが内部で使用するコレクションをインストール
+          ansible-galaxy collection install community.docker community.general amazon.aws
+
+      - name: Run Molecule Test
+        run: |
+          molecule test  # destroy -> create -> converge -> verify -> destroy を一気に行う
+        working-directory: ./ansible/roles/wordpress
+        env:
+          PY_COLORS: '1'
+          ANSIBLE_FORCE_COLOR: '1'   
+
+
+# ---------------------------------------------------------------------------
+# 3. インフラ構築 & デプロイ (Terraform & Ansible)
+# 役割: テスト済みのコードを、本物のAWS環境へ反映する
+# ---------------------------------------------------------------------------
+  terraform_deploy:
+    needs: molecule # テストが成功した時だけ、本番環境の操作を許可する
+    runs-on: ubuntu-latest
+    # ジョブ内の全ステップを terraform ディレクトリで実行する
+    defaults:
+      run:
+        working-directory: ./terraform
+    # PR時は Plan まで、マージ(Push)時は Apply まで実行する
+    env:
+      TF_WORKSPACE: ${{ (github.base_ref == 'main' || github.ref == 'refs/heads/main') && 'prd' || 'dev' }}
+
+    steps:
+      # 1. GitHub Actionsの仮想マシンにあなたのコードをコピーする
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. AWSとの信頼関係（OIDC）を利用して一時的な鍵を取得する
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # 変数 ${{ secrets.名前 }} で呼び出す
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
+          aws-region: ap-northeast-1
+
+      # 3. Terraformをインストールする
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.3 # 使っているバージョンに合わせる
+
+      # 4. terraform init（S3バックエンドへの接続など）
+      - name: Terraform Init
+        run: terraform init
+
+      # 5. TFLint のセットアップと実行
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v3
+        with:
+          tflint_version: v0.48.0
+
+      - name: Init TFLint
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run TFLint
+        run: tflint -f compact
+
+      # 6. Checkov の実行（セキュリティスキャン）
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: terraform
+          soft_fail: true # 警告が出ても処理を止めない設定
+          quiet: true
+
+      # 7. terraform plan（プルリクエスト時などに実行）
+      - name: Terraform Plan
+        run: terraform plan
+
+      # --- ここから下は「マージ(Push)」された時だけ実行される安全装置 ---
+      # 8. pushイベント（マージ）の時だけ Apply を実行
+      - name: Terraform Apply
+        if: github.event_name == 'push'
+        run: terraform apply -auto-approve
+
+      # 9. Ansible 用の SSH 秘密鍵を配置
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          cat <<'EOF' > ~/.ssh/id_ed25519
+          ${{ secrets.SSH_PRIVATE_KEY }}
+          EOF
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 > ~/.ssh/id_ed25519.pub
+
+      # 10. GitHub Actions 用の SSH Config 生成
+      - name: Create SSH Config
+        run: |
+          cat <<EOT >> ~/.ssh/config
+          Host i-* mi-*
+              User ec2-user
+              IdentityFile $HOME/.ssh/id_ed25519
+              StrictHostKeyChecking no
+              UserKnownHostsFile /dev/null
+              ProxyCommand sh -c "aws ec2-instance-connect send-ssh-public-key --instance-id %h --instance-os-user ec2-user --ssh-public-key file://$HOME/.ssh/id_ed25519.pub && aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters portNumber=%p"
+          EOT
+
+      # 11. Ansible の実行
+      - name: Run Ansible Playbook
+        if: github.event_name == 'push' # Apply が成功した時だけ実行
+        working-directory: ./ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+
+        run: |
+          # システムに直接boto3とansible-core(Ansibleの本体)をインストール        
+          python3 -m pip install --upgrade pip
+          python3 -m pip install boto3 botocore ansible-core
+
+          # 2. 必要なコレクションのインストール
+          ansible-galaxy collection install amazon.aws
+
+          # 3. 実行
+          ansible-playbook -i inventory.aws_ec2.yml site.yml 
