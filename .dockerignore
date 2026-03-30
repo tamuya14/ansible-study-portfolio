@@ -1,0 +1,25 @@
+# 1. Python 関連 (コンテナ内で pip install するので不要)
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 2. Git 関連 (イメージ内に履歴は不要)
+.git/
+.gitignore
+
+# 3. Terraform 関連 (コンテナ内で terraform init するので不要)
+.terraform/
+*.tfstate*
+*.tfvars
+.terraform.lock.hcl
+
+# 4. Ansible 関連
+.ansible_cache/
+molecule/default/docker/
+
+# 5. その他、Dockerビルドに不要なもの
+Dockerfile
+.dockerignore
+README.md
+docs/

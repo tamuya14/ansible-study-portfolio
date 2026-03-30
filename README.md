@@ -2,7 +2,7 @@
 ![TFLint](https://img.shields.io/badge/TFLint-implemented-brightgreen.svg)
 ![Checkov](https://img.shields.io/badge/Checkov-soft--fail-yellow.svg)
 
-![Ansible](https://img.shields.io/badge/Ansible-v2.15-red.svg?logo=ansible)
+![Ansible](https://img.shields.io/badge/Ansible-v2.20.x-red.svg?logo=ansible)
 ![Molecule](https://img.shields.io/badge/Molecule-Tested-brightgreen.svg)
 ![Ansible-Lint](https://img.shields.io/badge/Ansible--Lint-passed-brightgreen.svg)
 
@@ -41,9 +41,11 @@
 
 | カテゴリ | 技術・ツール | 実装パラダイム / 具体的なアプローチ |
 | :--- | :--- | :--- |
+| **Platform** | Ubuntu 24.04 LTS | **Modern OS Baseline**: 最新のセキュリティパッチと Python 3.12 実行環境を担保 |
+| **Runtime** | Python 3.12.x | **Dependency Stability**: 最新の ansible-core に必要な Python バージョンを維持 |
 | **Cloud** | AWS | **Immutable Infrastructure**: ASGによるインスタンス入れ替え、RDS、ALB |
 | **IaC** | Terraform(v1.14.3) | **Multi-Environment**: Workspaceを用いたdev/prd環境分離、default\_tags活用 |
-| **Config Mgmt** | Ansible(ansible-core 2.15) | **Role-based & Dynamic**: 役割別の疎結合Role、AWS動的インベントリ、Lookup |
+| **Config Mgmt** | Ansible(ansible-core 2.20.x) | **Role-based & Dynamic**: 役割別の疎結合Role、AWS動的インベントリ、Lookup |
 | **CI/CD** | GitHub Actions | **Sequential Pipeline & GitOps**: Branch戦略（feat-\>dev-\>main）と連動した自動化 |
 | **Testing** | Molecule, Testinfra, ansible-lint | **Shift-Left**: Dockerを用いたAmazon Linux 2023コンテナ上での動的テスト |
 | **Security** | AWS SSM, Secrets Manager, OIDC | **Zero Trust SSH**: インスタンスコネクト＋SSM Proxy、機密情報の動的注入 |
@@ -83,20 +85,34 @@
 
 本プロジェクトを自身の環境で再現、または検証するためのセットアップ手順です。
 
+### 🐳 Dockerによるクリーンな検証環境 (Recommended)
+
+本プロジェクトのセットアップ手順は、Ubuntu 24.04 (Python 3.12) 環境で完全に再現されることを Docker を用いて検証済みです。ローカル環境を汚したくない場合や、依存関係のエラーを避けたい場合は、以下の手順での検証を推奨します。使用しているDockerfileは、GitHub ActionsのCI環境と高い親和性を持ち、環境差異による「手元では動くがCIで落ちる」問題を未然に防ぎます。
+
+```bash
+# 1. 検証用イメージのビルド (依存関係の整合性を自動チェック)
+docker build -t project-validator .
+
+# 2. コンテナの起動 (ホストのAWS認証情報を共有)
+docker run --rm -it -v ~/.aws:/root/.aws:ro project-validator /bin/bash
+```
+
 ### 1. 前提条件 (Prerequisites)
 以下のツールがインストールされていることを想定しています。
-- **OS**: Windows 10/11 + WSL2 (Ubuntu 22.04 LTS 推奨)
+- **OS**: Windows 10/11 + WSL2 (Ubuntu 24.04 LTS 必須)
 - **Terraform**: v1.14.x
 - **Ansible**: ansible [core 2.20.x]
 - **AWS アカウント**: 管理者権限（AdministratorAccess）を持つ IAM ユーザ/ロール
 > (学習環境のため、権限によるエラーを防ぐ目的であえて強い権限を付与。本番環境では適切な権限管理が必要)
 - **AWS CLI**: v2.x ( `aws configure` により作成したIAM ユーザ/ロールと連携できていること)
 - **Session Manager Plugin**: AWS CLI用の拡張プラグイン
-- **Python**: v3.9+ (および venv モジュール)
+- **Python**: v3.11+ (および venv モジュール)
+(推奨 v3.12: Ansible の最新のセキュリティパッチを適用するため、Python 3.11 以上を必須としています)
 - **Docker Desktop**: WSL Integration が有効であること（Molecule テスト用）
 - **AWS Parameter Store:** `/my-project/common/sns_email` を作成済みでSNSの送信先メールアドレスを登録済みであること。
 - **GitHub 認証設定**: ローカル環境からGitHubを利用するための認証設定が済んでいること。
    - [GitHub の SSH 鍵作成手順はこちら](https://docs.github.com/ja/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-your-ssh-agent)
+
 
 ---
 
@@ -440,6 +456,18 @@ GitHub Actionsのホスト（Ubuntu 22.04以降）が採用する **Cgroup V2** 
 
 **【解決策】**
 **SSM Session Manager** を SSHの `ProxyCommand` に組み込み、さらに **EC2 Instance Connect** を併用。接続の瞬間にだけ有効な公開鍵をAWS API経由でプッシュし、SSMトンネルを通して通信する「鍵をサーバに残さない」使い捨て認証フローを確立。セキュリティと自動デプロイの両立を達成しました。
+
+### 5. 依存関係の袋小路（Dependency Hell）の突破とOS刷新
+**【課題】**
+GitHub DependabotよりAnsibleの脆弱性警告を受けましたが、単純なバージョンアップではPython 3.10環境との競合が発生し、アップデートが拒否される「依存関係の袋小路」に直面しました。
+
+**【解決策】**
+
+1. **Dockerによる隔離検証**: `ubuntu:22.04` から `24.04` へのベースイメージ刷新を伴う Dockerfile を作成し、一からビルドを試行。
+
+2. **ランタイムの特定**: Ansible最新版（core 2.17+）には Python 3.11 以上が必須であることをログから特定し、プロジェクト全体の前提OSを Ubuntu 24.04 (Python 3.12) へ引き上げる意思決定を行いました。
+
+3. **再現性の担保**: `pip-compile` による `requirements.txt` の再生成と Docker での構文チェック（`--syntax-check`）を完走させ、セキュリティとポータビリティの両立を証明しました。
 
 ---
 
